@@ -133,12 +133,12 @@ class MetabaseLLMAgent:
         # Create a copy of dashboard_context for logging and truncate data for brevity
         # For the LLM prompt, we'll truncate data even more aggressively to save tokens.
         llm_dashboard_context = json.loads(json.dumps(dashboard_context)) # Deep copy
-        for card in llm_dashboard_context.get("cards", []):
-            if "data" in card and isinstance(card["data"], list):
-                # Truncate data to a very small number of rows for the LLM prompt
-                card["data"] = card["data"][:1] # Limit to 1 row for the LLM
-                if len(card["data"]) > 1:
-                    card["data"].append("... (truncated)")
+        # Remove or relax truncation: send all data rows
+        # for card in llm_dashboard_context.get("cards", []):
+        #     if "data" in card and isinstance(card["data"], list):
+        #         card["data"] = card["data"][:1] # Limit to 1 row for the LLM
+        #         if len(card["data"]) > 1:
+        #             card["data"].append("... (truncated)")
         logger.debug("Dashboard context sent to LLM (truncated for logs): %s" % json.dumps(llm_dashboard_context, indent=2))
 
         # Limit chat history to the last few turns to save tokens
