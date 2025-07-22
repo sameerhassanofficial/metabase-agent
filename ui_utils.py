@@ -57,23 +57,66 @@ def render_chat_response(response_json):
                 if len(numeric_cols) > 0:
                     # Exclude total row from chart
                     plot_df = df.iloc[:-1] if 'Total' in str(df.iloc[-1,0]) else df
+                    
+                    # Debug logging
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Chart data columns: {list(plot_df.columns)}")
+                    logger.info(f"Numeric columns: {list(numeric_cols)}")
+                    logger.info(f"First few rows: {plot_df.head().to_dict()}")
+                    
+                    # Simple x-axis selection logic
+                    x_col = None
+                    x_title = 'Index'
+                    
+                    # Look for common categorical column names first
+                    categorical_keywords = ['mhu', 'MHU', 'category', 'Category', 'name', 'Name', 'label', 'Label', 'type', 'Type']
+                    for keyword in categorical_keywords:
+                        for col in plot_df.columns:
+                            if keyword in col and col not in numeric_cols:
+                                x_col = col
+                                x_title = col
+                                logger.info(f"Found categorical column: {col}")
+                                break
+                        if x_col:
+                            break
+                    
+                    # If no keyword match, use first non-numeric column
+                    if not x_col:
+                        for col in plot_df.columns:
+                            if col not in numeric_cols:
+                                x_col = col
+                                x_title = col
+                                logger.info(f"Using first non-numeric column: {col}")
+                                break
+                    
+                    # If still no column, use index
+                    if not x_col:
+                        x_col = plot_df.index
+                        x_title = 'Index'
+                        logger.info("Using index as x-axis")
+                    
+                    logger.info(f"Final x-axis selection: {x_col} (title: {x_title})")
+                    
+                    # Create the bar chart
                     fig = px.bar(
                         plot_df,
-                        x=plot_df.index if 'MHU' not in plot_df.columns else plot_df['MHU'],
+                        x=x_col,
                         y=numeric_cols,
                         barmode='group',
                         title="Bar Chart of Numeric Columns",
                         color_discrete_sequence=px.colors.qualitative.Plotly
                     )
                     fig.update_layout(
-                        xaxis_title='MHU' if 'MHU' in df.columns else 'Index',
+                        xaxis_title=x_title,
                         yaxis_title='Total',
                         font=dict(size=16),
                         legend_title_text='Metric',
                         bargap=0.2,
                         plot_bgcolor='rgba(0,0,0,0)'
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    # Add unique key for plotly chart
+                    chart_key = f"bar_chart_{hash(str(plot_df.columns.tolist()))}_{hash(str(plot_df.head().to_dict()))}"
+                    st.plotly_chart(fig, use_container_width=True, key=chart_key)
                 else:
                     st.info("No numeric columns to plot.")
             with tab2:
@@ -85,72 +128,162 @@ def render_chat_response(response_json):
             fig = None
             value_col = None
             x_col = None
+            
+            # Handle different column naming conventions
             if chart_type == "pie":
-                value_col = chart_spec["values_column"]
-                fig = px.pie(
-                    df,
-                    names=chart_spec["labels_column"],
-                    values=value_col,
-                    title=chart_spec["title"],
-                    color_discrete_sequence=px.colors.qualitative.Plotly
-                )
-                fig.update_traces(textinfo='percent+label', textfont_size=16)
+                # Try different possible column names for pie charts
+                if "values_column" in chart_spec:
+                    value_col = chart_spec["values_column"]
+                elif "Count" in df.columns:
+                    value_col = "Count"
+                elif "Value" in df.columns:
+                    value_col = "Value"
+                else:
+                    # Find first numeric column
+                    numeric_cols = df.select_dtypes(include='number').columns
+                    value_col = numeric_cols[0] if len(numeric_cols) > 0 else None
+                
+                if "labels_column" in chart_spec:
+                    labels_col = chart_spec["labels_column"]
+                elif "Category" in df.columns:
+                    labels_col = "Category"
+                elif "Name" in df.columns:
+                    labels_col = "Name"
+                else:
+                    # Find first non-numeric column
+                    non_numeric_cols = df.select_dtypes(exclude='number').columns
+                    labels_col = non_numeric_cols[0] if len(non_numeric_cols) > 0 else None
+                
+                if value_col and labels_col and value_col in df.columns and labels_col in df.columns:
+                    fig = px.pie(
+                        df,
+                        names=labels_col,
+                        values=value_col,
+                        title=chart_spec.get("title", "Pie Chart"),
+                        color_discrete_sequence=px.colors.qualitative.Plotly
+                    )
+                    fig.update_traces(textinfo='percent+label', textfont_size=16)
+                else:
+                    st.warning(f"Could not find required columns for pie chart. Available columns: {list(df.columns)}")
+                    continue
+                    
             elif chart_type == "bar":
-                value_col = chart_spec["y_axis_column"]
-                x_col = chart_spec["x_axis_column"]
-                fig = px.bar(
-                    df,
-                    x=x_col,
-                    y=value_col,
-                    title=chart_spec["title"],
-                    color=value_col,
-                    color_discrete_sequence=px.colors.qualitative.Plotly
-                )
-                fig.update_layout(
-                    xaxis_title=x_col,
-                    yaxis_title=value_col,
-                    font=dict(size=16),
-                    legend_title_text=value_col,
-                    bargap=0.2,
-                    plot_bgcolor='rgba(0,0,0,0)'
-                )
+                # Try different possible column names for bar charts
+                if "y_axis_column" in chart_spec:
+                    value_col = chart_spec["y_axis_column"]
+                elif "Count" in df.columns:
+                    value_col = "Count"
+                elif "Value" in df.columns:
+                    value_col = "Value"
+                else:
+                    # Find first numeric column
+                    numeric_cols = df.select_dtypes(include='number').columns
+                    value_col = numeric_cols[0] if len(numeric_cols) > 0 else None
+                
+                if "x_axis_column" in chart_spec:
+                    x_col = chart_spec["x_axis_column"]
+                elif "Category" in df.columns:
+                    x_col = "Category"
+                elif "Name" in df.columns:
+                    x_col = "Name"
+                else:
+                    # Find first non-numeric column
+                    non_numeric_cols = df.select_dtypes(exclude='number').columns
+                    x_col = non_numeric_cols[0] if len(non_numeric_cols) > 0 else None
+                
+                if value_col and x_col and value_col in df.columns and x_col in df.columns:
+                    fig = px.bar(
+                        df,
+                        x=x_col,
+                        y=value_col,
+                        title=chart_spec.get("title", "Bar Chart"),
+                        color=value_col,
+                        color_discrete_sequence=px.colors.qualitative.Plotly
+                    )
+                    fig.update_layout(
+                        xaxis_title=x_col,
+                        yaxis_title=value_col,
+                        font=dict(size=16),
+                        legend_title_text=value_col,
+                        bargap=0.2,
+                        plot_bgcolor='rgba(0,0,0,0)'
+                    )
+                else:
+                    st.warning(f"Could not find required columns for bar chart. Available columns: {list(df.columns)}")
+                    continue
+                    
             elif chart_type == "line":
-                value_col = chart_spec["y_axis_column"]
-                x_col = chart_spec["x_axis_column"]
-                fig = px.line(
-                    df,
-                    x=x_col,
-                    y=value_col,
-                    title=chart_spec["title"],
-                    color_discrete_sequence=px.colors.qualitative.Plotly
-                )
-                fig.update_layout(
-                    xaxis_title=x_col,
-                    yaxis_title=value_col,
-                    font=dict(size=16),
-                    legend_title_text=value_col,
-                    plot_bgcolor='rgba(0,0,0,0)'
-                )
+                # Try different possible column names for line charts
+                if "y_axis_column" in chart_spec:
+                    value_col = chart_spec["y_axis_column"]
+                elif "Count" in df.columns:
+                    value_col = "Count"
+                elif "Value" in df.columns:
+                    value_col = "Value"
+                else:
+                    # Find first numeric column
+                    numeric_cols = df.select_dtypes(include='number').columns
+                    value_col = numeric_cols[0] if len(numeric_cols) > 0 else None
+                
+                if "x_axis_column" in chart_spec:
+                    x_col = chart_spec["x_axis_column"]
+                elif "Category" in df.columns:
+                    x_col = "Category"
+                elif "Name" in df.columns:
+                    x_col = "Name"
+                else:
+                    # Find first non-numeric column
+                    non_numeric_cols = df.select_dtypes(exclude='number').columns
+                    x_col = non_numeric_cols[0] if len(non_numeric_cols) > 0 else None
+                
+                if value_col and x_col and value_col in df.columns and x_col in df.columns:
+                    fig = px.line(
+                        df,
+                        x=x_col,
+                        y=value_col,
+                        title=chart_spec.get("title", "Line Chart"),
+                        color_discrete_sequence=px.colors.qualitative.Plotly
+                    )
+                    fig.update_layout(
+                        xaxis_title=x_col,
+                        yaxis_title=value_col,
+                        font=dict(size=16),
+                        legend_title_text=value_col,
+                        plot_bgcolor='rgba(0,0,0,0)'
+                    )
+                else:
+                    st.warning(f"Could not find required columns for line chart. Available columns: {list(df.columns)}")
+                    continue
             else:
                 st.warning(f"Unsupported chart type: {chart_spec['chart_type']}")
                 continue
+                
             tab1, tab2 = st.tabs(["Chart", "Dataframe"])
             with tab1:
-                st.plotly_chart(fig, use_container_width=True)
-                if value_col and value_col in df.columns and pd.api.types.is_numeric_dtype(df[value_col]):
-                    total = df[value_col].sum()
-                    st.markdown(f"**Total {value_col}:** {total:,.2f}")
-                if chart_type in ("line", "bar") and x_col and value_col and x_col in df.columns and value_col in df.columns:
-                    pred = predict_trend(df, x_col, value_col, periods_ahead=1)
-                    if pred is not None:
-                        st.markdown(f"**Predicted next {value_col}:** {pred:,.2f}")
+                if fig:
+                    # Add unique key for plotly chart
+                    chart_key = f"{chart_type}_chart_{hash(str(df.columns.tolist()))}_{hash(str(df.head().to_dict()))}"
+                    st.plotly_chart(fig, use_container_width=True, key=chart_key)
+                    if value_col and value_col in df.columns and pd.api.types.is_numeric_dtype(df[value_col]):
+                        total = df[value_col].sum()
+                        st.markdown(f"**Total {value_col}:** {total:,.2f}")
+                    if chart_type in ("line", "bar") and x_col and value_col and x_col in df.columns and value_col in df.columns:
+                        pred = predict_trend(df, x_col, value_col, periods_ahead=1)
+                        if pred is not None:
+                            st.markdown(f"**Predicted next {value_col}:** {pred:,.2f}")
             with tab2:
                 st.dataframe(df, use_container_width=True)
-            csv_data = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="Download Chart Data (CSV)",
-                data=csv_data,
-                file_name=f"{chart_spec["title"].replace(" ", "_").lower()}_data.csv",
-                mime="text/csv",
-                key=f"download_csv_{chart_spec['title'].replace(' ', '_')}_{hash(frozenset(chart_spec_for_hash.items()))}"
-            )
+            
+            # Download button
+            try:
+                csv_data = df.to_csv(index=False).encode('utf-8')
+                chart_title = chart_spec.get("title", "chart_data")
+                st.download_button(
+                    label="Download Chart Data (CSV)",
+                    data=csv_data,
+                    file_name=f"{chart_title.replace(' ', '_').lower()}_data.csv",
+                    mime="text/csv",
+                    key=f"download_csv_{chart_title.replace(' ', '_')}_{hash(str(chart_spec))}"
+                )
+            except Exception as e:
+                logger.warning(f"Could not create download button: {e}")

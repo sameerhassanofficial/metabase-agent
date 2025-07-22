@@ -214,7 +214,7 @@ class MetabaseMetadataProvider:
                         data = query_result.get('data', {})
                         if 'rows' in data and 'cols' in data:
                             col_names = [col.get('display_name', col.get('name')) for col in data['cols']]
-                            card_context["data"] = [dict(zip(col_names, row)) for row in data['rows'][:30]]
+                            card_context["data"] = [dict(zip(col_names, row)) for row in data['rows']]  # Remove [:30] limit
                             # Add _filtered_by to each row if date_value is set
                             if date_value:
                                 for row in card_context["data"]:
@@ -226,7 +226,7 @@ class MetabaseMetadataProvider:
                             else:
                                 logger.warning(f"Could not retrieve schema for card {card_name} (ID: {card_id})")
                         else:
-                            card_context["data"] = data.get('rows', [])[:30]
+                            card_context["data"] = data.get('rows', [])  # Remove [:30] limit
                             # Add _filtered_by to each row if date_value is set
                             if date_value:
                                 for row in card_context["data"]:

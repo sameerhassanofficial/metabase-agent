@@ -106,13 +106,38 @@ def main():
         with st.chat_message(message["role"], avatar=avatar):
             render_chat_response(message["content"])
 
-    # Display suggested prompts as clickable links within the chat
-    if st.session_state.get("suggested_prompts"):
+    # Display suggested prompts as clickable links within the chat (for historical messages)
+    if st.session_state.get("suggested_prompts") and not st.session_state.get("prompt"):
         with st.chat_message("assistant", avatar="🤖"):
-            st.markdown("Here are some questions you might want to ask:")
-            for prompt_text in st.session_state.suggested_prompts:
-                st.markdown(f"- [{prompt_text}](/?prompt={prompt_text})")
-        st.session_state.suggested_prompts = [] # Clear prompts after displaying
+            st.markdown("**💡 Suggested follow-up questions:**")
+            
+            # Use a more robust approach with session state tracking
+            if st.session_state.suggested_prompts:
+                # Initialize button state tracking
+                button_state_key = f"hist_button_state_{len(st.session_state.messages)}"
+                if button_state_key not in st.session_state:
+                    st.session_state[button_state_key] = None
+                
+                # Create a container for the suggested questions
+                with st.container():
+                    for i, prompt_text in enumerate(st.session_state.suggested_prompts):
+                        # Create a unique key for each button
+                        button_key = f"hist_suggested_btn_{i}_{len(st.session_state.messages)}"
+                        
+                        # Check if this button was clicked
+                        if st.button(f"❓ {prompt_text}", key=button_key, use_container_width=True):
+                            # Set the prompt and clear suggestions
+                            st.session_state.prompt = prompt_text
+                            st.session_state.suggested_prompts = []
+                            # Mark this button as clicked
+                            st.session_state[button_state_key] = button_key
+                            st.rerun()
+            
+            # Clear suggestions button
+            clear_key = f"hist_clear_suggestions_{len(st.session_state.messages)}"
+            if st.button("🗑️ Clear suggestions", key=clear_key):
+                st.session_state.suggested_prompts = []
+                st.rerun()
 
     # Get user input
     if prompt := st.chat_input("Ask a question...") or st.session_state.get("prompt"):
@@ -164,18 +189,68 @@ def main():
                         response_json = {"response_parts": [{"type": "text", "content": "I found relevant cards, but couldn't retrieve data from them. They might be empty or have issues."}]}
                     else:
                         with st.spinner("🤖 AI is analyzing the data..."):
+                            logger.info(f"Calling AI agent with {len(dashboard_context.get('cards', []))} cards")
                             full_response_str = agent.answer_question(prompt, dashboard_context, st.session_state.messages, date_value)
+                            logger.debug(f"Raw AI response: {full_response_str[:500]}...")
+                            
                             try:
-                                clean_str = full_response_str.strip().replace("```json", "").replace("```", "")
-                                response_json = json.loads(clean_str)
-                            except json.JSONDecodeError:
-                                logger.error(f"Failed to decode AI response JSON: {full_response_str}")
-                                response_json = {"response_parts": [{"type": "text", "content": "Sorry, I received an invalid response from the AI."}]}
+                                # The response is already JSON from the improved answer_question method
+                                response_json = json.loads(full_response_str)
+                                logger.info(f"Successfully parsed response with {len(response_json.get('response_parts', []))} parts")
+                                
+                                # Validate response structure
+                                if not response_json.get("response_parts"):
+                                    logger.warning("Response has no response_parts")
+                                    response_json = {"response_parts": [{"type": "text", "content": "I received an incomplete response. Please try again."}]}
+                                
+                            except json.JSONDecodeError as e:
+                                logger.error(f"Failed to decode AI response JSON: {e}")
+                                logger.error(f"Response string: {full_response_str}")
+                                response_json = {"response_parts": [{"type": "text", "content": "Sorry, I received an invalid response from the AI. Please try rephrasing your question."}]}
+                            except Exception as e:
+                                logger.error(f"Unexpected error parsing response: {e}")
+                                response_json = {"response_parts": [{"type": "text", "content": "An unexpected error occurred while processing the response."}]}
                 
                 # Ensure response_json is set before rendering and appending to messages
                 if response_json is not None:
                     render_chat_response(response_json)
                     st.session_state.messages.append({"role": "assistant", "content": response_json})
+                    
+                    # Extract and store suggested questions from the response
+                    if "suggested_questions" in response_json and response_json["suggested_questions"]:
+                        st.session_state.suggested_prompts = response_json["suggested_questions"]
+                        logger.info(f"Extracted suggested questions: {response_json['suggested_questions']}")
+                        
+                        # Display suggested questions immediately after the response
+                        st.markdown("**💡 Suggested follow-up questions:**")
+                        
+                        # Use a more robust approach with session state tracking
+                        if st.session_state.suggested_prompts:
+                            # Initialize button state tracking
+                            button_state_key = f"button_state_{len(st.session_state.messages)}"
+                            if button_state_key not in st.session_state:
+                                st.session_state[button_state_key] = None
+                            
+                            # Create a container for the suggested questions
+                            with st.container():
+                                for i, prompt_text in enumerate(st.session_state.suggested_prompts):
+                                    # Create a unique key for each button
+                                    button_key = f"suggested_btn_{i}_{len(st.session_state.messages)}"
+                                    
+                                    # Check if this button was clicked
+                                    if st.button(f"❓ {prompt_text}", key=button_key, use_container_width=True):
+                                        # Set the prompt and clear suggestions
+                                        st.session_state.prompt = prompt_text
+                                        st.session_state.suggested_prompts = []
+                                        # Mark this button as clicked
+                                        st.session_state[button_state_key] = button_key
+                                        st.rerun()
+                        
+                        # Clear suggestions button
+                        clear_key = f"clear_suggestions_{len(st.session_state.messages)}"
+                        if st.button("🗑️ Clear suggestions", key=clear_key):
+                            st.session_state.suggested_prompts = []
+                            st.rerun()
 
             except Exception as e:
                 logger.error(f"An error occurred: {e}", exc_info=True)
