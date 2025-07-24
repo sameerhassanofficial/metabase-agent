@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 from analytics_utils import get_numeric_summaries, predict_trend
 import logging
+import uuid
 
 def render_chat_response(response_json):
     """Renders a structured AI response, including text, charts, and tables. Logs errors for malformed parts."""
@@ -41,86 +42,143 @@ def render_chat_response(response_json):
             if not summary_shown:  # If not already shown as summary
                 st.markdown(part["content"])
         elif part_type == "table":
-            df = pd.DataFrame(part["data"])
+            # Use column_names for DataFrame columns, and do not include header row as data
+            if "column_names" in part and part["column_names"]:
+                # Remove header row if present
+                if part["data"] and part["data"][0] == part["column_names"]:
+                    data_rows = part["data"][1:]
+                else:
+                    data_rows = part["data"]
+                df = pd.DataFrame(data_rows, columns=part["column_names"])
+            else:
+                df = pd.DataFrame(part["data"])
+            
+            # Map generic column names to meaningful ones if needed
+            if "column_names" not in part or not part["column_names"]:
+                column_mapping = {
+                    0: "Patient Name",
+                    1: "Age", 
+                    2: "Gender",
+                    3: "Date of Birth",
+                    4: "Location",
+                    5: "Visit Date",
+                    6: "CNIC",
+                    7: "Weight",
+                    8: "Temperature",
+                    9: "Mobile Health Unit",
+                    10: "Medical Record Number",
+                    11: "Referral Details"
+                }
+                new_columns = []
+                for i, col in enumerate(df.columns):
+                    if isinstance(col, int) and col in column_mapping:
+                        new_columns.append(column_mapping[col])
+                    else:
+                        new_columns.append(str(col))
+                df.columns = new_columns
+            
+            # Heuristic: columns that should NOT be coerced to numeric
+            id_like_keywords = ["code", "id", "name", "unit", "location"]
+            def is_id_like(col):
+                col_lower = str(col).lower()
+                return any(kw in col_lower for kw in id_like_keywords)
+            # Ensure all data is properly typed to avoid ArrowTypeError
+            for col in df.columns:
+                if not is_id_like(col):
+                    try:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                    except Exception:
+                        df[col] = df[col].astype(str)
+                else:
+                    df[col] = df[col].astype(str)
             numeric_cols = df.select_dtypes(include='number').columns
-            # Add a 'Total' column for all numeric columns (row-wise sum)
+            # Add a 'Total' column for all numeric columns (row-wise sum) only if it makes sense
             if not df.empty and len(numeric_cols) > 0:
-                df['Total'] = df[numeric_cols].sum(axis=1)
-                # Add a 'Total' row at the bottom for all numeric columns and the new 'Total' column
-                total_row = {col: df[col].sum() for col in numeric_cols}
-                total_row['Total'] = df['Total'].sum()
-                total_row_full = {col: total_row.get(col, '') for col in df.columns}
-                total_row_full[next(iter(df.columns))] = 'Total'  # Label the first column as 'Total'
-                df = pd.concat([df, pd.DataFrame([total_row_full])], ignore_index=True)
+                if len(numeric_cols) > 1 and all(col in ['Age', 'Weight', 'Temperature'] for col in numeric_cols):
+                    df['Total'] = df[numeric_cols].sum(axis=1)
+                    total_row = {col: df[col].sum() for col in numeric_cols}
+                    total_row['Total'] = df['Total'].sum()
+                    total_row_full = {col: total_row.get(col, '') for col in df.columns}
+                    total_row_full[next(iter(df.columns))] = 'Total'
+                    df = pd.concat([df, pd.DataFrame([total_row_full])], ignore_index=True)
             tab1, tab2 = st.tabs(["Chart", "Dataframe"])
             with tab1:
                 if len(numeric_cols) > 0:
-                    # Exclude total row from chart
                     plot_df = df.iloc[:-1] if 'Total' in str(df.iloc[-1,0]) else df
-                    
-                    # Debug logging
                     logger = logging.getLogger(__name__)
                     logger.info(f"Chart data columns: {list(plot_df.columns)}")
                     logger.info(f"Numeric columns: {list(numeric_cols)}")
                     logger.info(f"First few rows: {plot_df.head().to_dict()}")
-                    
-                    # Simple x-axis selection logic
+                    # Robust x_col selection
                     x_col = None
                     x_title = 'Index'
-                    
-                    # Look for common categorical column names first
-                    categorical_keywords = ['mhu', 'MHU', 'category', 'Category', 'name', 'Name', 'label', 'Label', 'type', 'Type']
-                    for keyword in categorical_keywords:
+                    healthcare_keywords = ['mhu', 'unit', 'gender', 'location', 'name']
+                    for keyword in healthcare_keywords:
                         for col in plot_df.columns:
-                            if keyword in col and col not in numeric_cols:
+                            col_str = str(col)
+                            if keyword in col_str.lower() and col not in numeric_cols:
                                 x_col = col
-                                x_title = col
-                                logger.info(f"Found categorical column: {col}")
+                                x_title = col_str
+                                logger.info(f"Found healthcare categorical column: {col}")
                                 break
                         if x_col:
                             break
-                    
-                    # If no keyword match, use first non-numeric column
                     if not x_col:
+                        # Use first non-numeric column
                         for col in plot_df.columns:
                             if col not in numeric_cols:
                                 x_col = col
-                                x_title = col
+                                x_title = str(col)
                                 logger.info(f"Using first non-numeric column: {col}")
                                 break
-                    
-                    # If still no column, use index
                     if not x_col:
-                        x_col = plot_df.index
+                        # If still not found, create an Index column
+                        plot_df = plot_df.copy()
+                        plot_df['Index'] = range(1, len(plot_df)+1)
+                        x_col = 'Index'
                         x_title = 'Index'
-                        logger.info("Using index as x-axis")
-                    
+                        logger.info("No suitable x_col found, using DataFrame index as column.")
                     logger.info(f"Final x-axis selection: {x_col} (title: {x_title})")
-                    
-                    # Create the bar chart
                     fig = px.bar(
                         plot_df,
                         x=x_col,
                         y=numeric_cols,
                         barmode='group',
-                        title="Bar Chart of Numeric Columns",
+                        title=part.get("title", "Healthcare Data Analysis"),
                         color_discrete_sequence=px.colors.qualitative.Plotly
                     )
                     fig.update_layout(
                         xaxis_title=x_title,
-                        yaxis_title='Total',
+                        yaxis_title='Value',
                         font=dict(size=16),
                         legend_title_text='Metric',
                         bargap=0.2,
                         plot_bgcolor='rgba(0,0,0,0)'
                     )
-                    # Add unique key for plotly chart
-                    chart_key = f"bar_chart_{hash(str(plot_df.columns.tolist()))}_{hash(str(plot_df.head().to_dict()))}"
+                    unique_id = uuid.uuid4().hex
+                    chart_key = f"bar_chart_{unique_id}"
                     st.plotly_chart(fig, use_container_width=True, key=chart_key)
+                    # Only run trend prediction if x_col is a valid column, numeric, and not an ID/code/categorical column
+                    if (
+                        isinstance(x_col, str)
+                        and x_col in plot_df.columns
+                        and pd.api.types.is_numeric_dtype(plot_df[x_col])
+                        and not is_id_like(x_col)
+                    ):
+                        try:
+                            for value_col in numeric_cols:
+                                pred = predict_trend(plot_df, x_col, value_col, periods_ahead=1)
+                                if pred is not None:
+                                    st.write(f"Predicted next value for {value_col}: {pred}")
+                        except Exception as e:
+                            logger.warning(f"Trend prediction failed: {e}")
+                    else:
+                        logger.info(f"Skipping trend prediction: x_col '{x_col}' is not suitable (must be numeric and not ID/code/categorical).")
                 else:
                     st.info("No numeric columns to plot.")
             with tab2:
                 st.dataframe(df, use_container_width=True)
+            # --- End robust chart/table logic ---
         elif part_type == "chart":
             chart_spec = part["spec"]
             df = pd.DataFrame(chart_spec["data"])
@@ -262,15 +320,28 @@ def render_chat_response(response_json):
             with tab1:
                 if fig:
                     # Add unique key for plotly chart
-                    chart_key = f"{chart_type}_chart_{hash(str(df.columns.tolist()))}_{hash(str(df.head().to_dict()))}"
+                    unique_id = uuid.uuid4().hex
+                    chart_key = f"{chart_type}_chart_{unique_id}"
                     st.plotly_chart(fig, use_container_width=True, key=chart_key)
                     if value_col and value_col in df.columns and pd.api.types.is_numeric_dtype(df[value_col]):
                         total = df[value_col].sum()
                         st.markdown(f"**Total {value_col}:** {total:,.2f}")
                     if chart_type in ("line", "bar") and x_col and value_col and x_col in df.columns and value_col in df.columns:
-                        pred = predict_trend(df, x_col, value_col, periods_ahead=1)
-                        if pred is not None:
-                            st.markdown(f"**Predicted next {value_col}:** {pred:,.2f}")
+                        # Only run trend prediction if x_col is numeric and not an ID/code/categorical column
+                        if (
+                            isinstance(x_col, str)
+                            and x_col in df.columns
+                            and pd.api.types.is_numeric_dtype(df[x_col])
+                            and not is_id_like(x_col)
+                        ):
+                            try:
+                                pred = predict_trend(df, x_col, value_col, periods_ahead=1)
+                                if pred is not None:
+                                    st.markdown(f"**Predicted next {value_col}:** {pred:,.2f}")
+                            except Exception as e:
+                                logger.warning(f"Trend prediction failed: {e}")
+                        else:
+                            logger.info(f"Skipping trend prediction: x_col '{x_col}' is not suitable (must be numeric and not ID/code/categorical).")
             with tab2:
                 st.dataframe(df, use_container_width=True)
             

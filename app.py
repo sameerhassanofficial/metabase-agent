@@ -19,10 +19,13 @@ from ui_utils import render_chat_response
 # --- Initial Configuration ---
 load_dotenv()  # Load environment variables from .env file
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Configure logging to suppress OpenAI debug messages
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logging.getLogger('watchdog').setLevel(logging.WARNING)
 logging.getLogger('urllib3.connectionpool').setLevel(logging.WARNING)
+logging.getLogger('openai._base_client').setLevel(logging.WARNING)
+logging.getLogger('openai').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # --- Streamlit Application UI ---
@@ -44,7 +47,90 @@ def main():
     """Main function to run the Streamlit chat application."""
     st.set_page_config(page_title="Mobile Health Units Assistant", layout="wide")
 
-    st.markdown("<h1 style='text-align: center;'>🧠 AI-Powered MHU Insights</h1>", unsafe_allow_html=True)
+    # Custom CSS for better styling with dark mode support
+    st.markdown("""
+    <style>
+    .main-header {
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 15px;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+    .main-header h1 {
+        color: white !important;
+        text-align: center;
+        margin: 0;
+        font-size: 2.5rem;
+        font-weight: 700;
+    }
+    .main-header p {
+        color: rgba(255,255,255,0.9) !important;
+        text-align: center;
+        margin: 0.5rem 0 0 0;
+        font-size: 1.1rem;
+    }
+    .welcome-box {
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        padding: 2rem;
+        border-radius: 15px;
+        margin-bottom: 2rem;
+        border-left: 5px solid #667eea;
+    }
+    .welcome-box h3 {
+        color: #ffffff !important;
+        margin-top: 0;
+    }
+    .welcome-box p {
+        color: #e0e0e0 !important;
+        margin-bottom: 1rem;
+    }
+    .welcome-box ul {
+        color: #e0e0e0 !important;
+    }
+    .welcome-box strong {
+        color: #ffffff !important;
+    }
+    .chat-container {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 15px;
+        padding: 1rem;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .stChatMessage {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .stChatMessage[data-testid="chatMessage"] {
+        border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    /* Dark mode text visibility */
+    .stMarkdown, .stText {
+        color: inherit !important;
+    }
+    /* Ensure all text is visible in dark mode */
+    .stMarkdown p, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4, .stMarkdown h5, .stMarkdown h6 {
+        color: #ffffff !important;
+    }
+    .stMarkdown ul, .stMarkdown ol {
+        color: #e0e0e0 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Enhanced header
+    st.markdown("""
+    <div class="main-header">
+        <h1>🧠 AI-Powered MHU Data Assistant</h1>
+        <p>Mobile Health Units • Intelligent Data Analysis</p>
+    </div>
+    """, unsafe_allow_html=True)
     
 
     # --- Environment Variable Check ---
@@ -56,49 +142,40 @@ def main():
     # --- Initialization ---
     client = init_metabase_client()
     provider = MetabaseMetadataProvider(client.session, client.config)
+    
+    # Share the same Metabase client with the agent to avoid duplicate authentication
     agent = MetabaseLLMAgent()
+    agent.metabase_client = client  # Use the same authenticated client
 
-    # --- Sidebar for Dashboard Selection ---
-    st.sidebar.header("Dashboard")
-    dashboards = provider.get_dashboards()
-    if not dashboards:
-        st.sidebar.warning("No dashboards found.")
-        return # Use return instead of st.stop()
-
-    selected_dashboard_id = 8 # Hardcoded for debugging
-    dashboard_info = provider.get_dashboard_details(selected_dashboard_id)
-    selected_dashboard_name = dashboard_info.get("name", "Hardcoded Dashboard 8")
-    st.sidebar.write(f"{selected_dashboard_name.replace(' - Dashboard', '')}")
-
-    # Display a list of cards (questions) in the dashboard
-    st.sidebar.subheader("Available Cards")
-    dashcards_list = []
-    for dc in dashboard_info.get("dashcards", []):
-        if dc.get("card_id"): # Only consider actual cards, not just dashboard elements
-            dashcards_list.append(dc.get("card", {}).get("name"))
-
-    if dashcards_list:
-        for card_name in dashcards_list:
-            st.sidebar.markdown(f"- {card_name}")
-    else:
-        st.sidebar.info("No data cards found in this dashboard.")
-
-    
-
-    
-
-    
-
-    
+    # --- Auto-select Dashboard ID 8 (No Sidebar) ---
+    selected_dashboard_id = 8
 
     # --- Main Chat UI ---
     
 
     # Initialize chat history
-    if "messages" not in st.session_state or st.session_state.get("current_dashboard_id") != selected_dashboard_id:
+    if "messages" not in st.session_state:
         st.session_state.messages = []
-        st.session_state.current_dashboard_id = selected_dashboard_id
         st.session_state.selected_date = None # Initialize selected_date
+
+    # Show suggested questions for new users (without welcome card)
+    if not st.session_state.messages:
+        # Suggested questions for new users
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📊 Show me total patient count", use_container_width=True):
+                st.session_state.prompt = "Show me the total patient count"
+                st.rerun()
+            if st.button("👥 What's the gender distribution?", use_container_width=True):
+                st.session_state.prompt = "What's the gender distribution of patients?"
+                st.rerun()
+        with col2:
+            if st.button("🏥 Which MHU has most patients?", use_container_width=True):
+                st.session_state.prompt = "Which Mobile Health Unit has the most patients?"
+                st.rerun()
+            if st.button("📈 Show patient trends", use_container_width=True):
+                st.session_state.prompt = "Show me patient trends over time"
+                st.rerun()
 
     # Display chat messages
     for message in st.session_state.messages:
@@ -139,122 +216,114 @@ def main():
                 st.session_state.suggested_prompts = []
                 st.rerun()
 
+    # Chat input area with better styling
+    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+    
     # Get user input
-    if prompt := st.chat_input("Ask a question...") or st.session_state.get("prompt"):
+    if prompt := st.chat_input("💬 Ask me anything about your MHU data...") or st.session_state.get("prompt"):
         st.session_state.prompt = None # Clear state
         st.session_state.messages.append({"role": "user", "content": {"response_parts": [{"type": "text", "content": prompt}]}})
         with st.chat_message("user"):
-            st.markdown(prompt)
+            st.markdown(f"**{prompt}**")
 
         # Generate and display assistant response
         with st.chat_message("assistant"):
-            progress_bar = st.progress(0.0, text="Analyzing dashboard structure...")
-            status_text = st.empty()
-            dashboard_context = None
-            
-            try:
-                # Step 1: Get all card names and descriptions for the AI to analyze
-                all_dashcards = [dc for dc in provider.get_dashboard_details(selected_dashboard_id).get("dashcards", []) if dc.get("card_id")]
-                
-                status_text.text("AI is identifying relevant cards...")
-                relevant_card_names = agent.identify_relevant_cards(prompt, all_dashcards)
-                
-                response_json = None # Initialize response_json at the beginning of the try block
+            # Simple progress indicator
+            with st.status("🤖 AI is analyzing your question...", expanded=False) as status:
+                try:
+                    logger.info(f"🚀 STARTING PROCESS: Analyzing question: '{prompt}'")
+                    
+                    # Get dashboard details when needed (cached in session state)
+                    if "dashboard_details" not in st.session_state:
+                        dashboard_details = provider.get_dashboard_details(selected_dashboard_id)
+                        if not dashboard_details:
+                            st.error(f"Could not retrieve dashboard ID: {selected_dashboard_id}")
+                            return
+                        st.session_state.dashboard_details = dashboard_details
+                    else:
+                        dashboard_details = st.session_state.dashboard_details
 
-                if not relevant_card_names:
-                    response_json = {"response_parts": [{"type": "text", "content": "I couldn't identify any relevant cards for your question. Please try rephrasing or ask a question related to the available Metabase cards."}]}
-                
-                if relevant_card_names and response_json is None: # Only proceed if relevant cards were found/assigned and no fallback message yet
-                    # Step 3: Fetch data only for relevant cards
+                    # Create Simplified Card Details for the LLM
+                    all_dashcards = [dc for dc in dashboard_details.get("dashcards", []) if dc.get("card_id")]
+                    if not all_dashcards:
+                        st.warning(f"No cards found in dashboard {selected_dashboard_id}. Please ensure the dashboard contains cards.")
+                        return
+
+                    simplified_card_details = []
+                    for dashcard in all_dashcards:
+                        card = dashcard.get("card", {})
+                        simplified_info = {
+                            "card_id": card.get("id"),
+                            "card_name": card.get("name", "Unnamed Card"),
+                            "card_description": card.get("description", "No description available"),
+                            "result_metadata": card.get("schema", [])
+                        }
+                        simplified_card_details.append(simplified_info)
+
+                    # Prepare date filters
                     date_filters = agent.parse_date_filters(prompt, st.session_state.selected_date)
                     date_value = date_filters.get("date_value")
 
-                    # Pass the specific dashcard to the generator
-                    for update in provider.get_dashboard_context_generator(selected_dashboard_id, relevant_card_names, date_value=date_value):
-                        if update["status"] == "progress":
-                            progress_bar.progress(update["progress"], text=update["message"])
-                        elif update["status"] == "complete":
-                            dashboard_context = update["context"]
-                            progress_bar.progress(1.0, text="All relevant data loaded!")
-                            time.sleep(1)
-                            break
-                        elif update["status"] == "error":
-                            st.error(update["message"])
-                            return # Use return instead of st.stop()
+                    full_response_str = agent.answer_question(
+                        prompt, selected_dashboard_id, st.session_state.messages, date_value, simplified_card_details, dashboard_details
+                    )
                     
-                    progress_bar.empty()
-                    status_text.empty()
+                    status.update(label="✅ Analysis complete!", state="complete")
 
-                    if not dashboard_context or not dashboard_context.get("cards"):
-                        response_json = {"response_parts": [{"type": "text", "content": "I found relevant cards, but couldn't retrieve data from them. They might be empty or have issues."}]}
+                    response_json = None
+                    if full_response_str is None:
+                        logger.error("agent.answer_question returned None.")
+                        response_json = {"response_parts": [{"type": "text", "content": "An unexpected error occurred: The AI agent did not return a valid response."}]}
                     else:
-                        with st.spinner("🤖 AI is analyzing the data..."):
-                            logger.info(f"Calling AI agent with {len(dashboard_context.get('cards', []))} cards")
-                            full_response_str = agent.answer_question(prompt, dashboard_context, st.session_state.messages, date_value)
-                            logger.debug(f"Raw AI response: {full_response_str[:500]}...")
-                            
-                            try:
-                                # The response is already JSON from the improved answer_question method
-                                response_json = json.loads(full_response_str)
-                                logger.info(f"Successfully parsed response with {len(response_json.get('response_parts', []))} parts")
-                                
-                                # Validate response structure
-                                if not response_json.get("response_parts"):
-                                    logger.warning("Response has no response_parts")
-                                    response_json = {"response_parts": [{"type": "text", "content": "I received an incomplete response. Please try again."}]}
-                                
-                            except json.JSONDecodeError as e:
-                                logger.error(f"Failed to decode AI response JSON: {e}")
-                                logger.error(f"Response string: {full_response_str}")
-                                response_json = {"response_parts": [{"type": "text", "content": "Sorry, I received an invalid response from the AI. Please try rephrasing your question."}]}
-                            except Exception as e:
-                                logger.error(f"Unexpected error parsing response: {e}")
-                                response_json = {"response_parts": [{"type": "text", "content": "An unexpected error occurred while processing the response."}]}
-                
-                # Ensure response_json is set before rendering and appending to messages
-                if response_json is not None:
-                    render_chat_response(response_json)
-                    st.session_state.messages.append({"role": "assistant", "content": response_json})
-                    
-                    # Extract and store suggested questions from the response
-                    if "suggested_questions" in response_json and response_json["suggested_questions"]:
-                        st.session_state.suggested_prompts = response_json["suggested_questions"]
-                        logger.info(f"Extracted suggested questions: {response_json['suggested_questions']}")
-                        
-                        # Display suggested questions immediately after the response
+                        logger.debug(f"Raw AI response: {full_response_str[:500]}...")
+
+                    try:
+                        # The response is already JSON from the improved answer_question method
+                        response_json = json.loads(full_response_str)
+                        logger.info(f"🎯 RESPONSE READY: {len(response_json.get('response_parts', []))} parts generated successfully")
+                        # Validate response structure
+                        if not response_json.get("response_parts"):
+                            logger.warning("Response has no response_parts")
+                            response_json = {"response_parts": [{"type": "text", "content": "I received an incomplete response. Please try again."}]}
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to decode AI response JSON: {e}")
+                        logger.error(f"Response string: {full_response_str}")
+                        response_json = {"response_parts": [{"type": "text", "content": "Sorry, I received an invalid response from the AI. Please try rephrasing your question."}]}
+                    except Exception as e:
+                        logger.error(f"Unexpected error parsing response: {e}")
+                        response_json = {"response_parts": [{"type": "text", "content": "An unexpected error occurred while processing the response."}]}
+
+                    # Ensure response_json is set before rendering and appending to messages
+                    if response_json is not None:
+                        render_chat_response(response_json)
+                        st.session_state.messages.append({"role": "assistant", "content": response_json})
+                        # Extract and store suggested questions from the response
+                        if "suggested_questions" in response_json and response_json["suggested_questions"]:
+                            st.session_state.suggested_prompts = response_json["suggested_questions"]
+                            logger.info(f"🎯 PROCESS COMPLETE: Response delivered with {len(response_json.get('response_parts', []))} parts and {len(response_json.get('suggested_questions', []))} follow-up questions")
+
+                    # Always display suggested follow-up questions immediately after the AI response
+                    if st.session_state.get("suggested_prompts"):
                         st.markdown("**💡 Suggested follow-up questions:**")
-                        
-                        # Use a more robust approach with session state tracking
-                        if st.session_state.suggested_prompts:
-                            # Initialize button state tracking
-                            button_state_key = f"button_state_{len(st.session_state.messages)}"
-                            if button_state_key not in st.session_state:
-                                st.session_state[button_state_key] = None
-                            
-                            # Create a container for the suggested questions
-                            with st.container():
-                                for i, prompt_text in enumerate(st.session_state.suggested_prompts):
-                                    # Create a unique key for each button
-                                    button_key = f"suggested_btn_{i}_{len(st.session_state.messages)}"
-                                    
-                                    # Check if this button was clicked
-                                    if st.button(f"❓ {prompt_text}", key=button_key, use_container_width=True):
-                                        # Set the prompt and clear suggestions
-                                        st.session_state.prompt = prompt_text
-                                        st.session_state.suggested_prompts = []
-                                        # Mark this button as clicked
-                                        st.session_state[button_state_key] = button_key
-                                        st.rerun()
-                        
-                        # Clear suggestions button
+                        with st.container():
+                            for i, prompt_text in enumerate(st.session_state.suggested_prompts):
+                                button_key = f"suggested_btn_{i}_{len(st.session_state.messages)}"
+                                if st.button(f"❓ {prompt_text}", key=button_key, use_container_width=True):
+                                    st.session_state.prompt = prompt_text
+                                    st.session_state.suggested_prompts = []
+                                    st.rerun()
                         clear_key = f"clear_suggestions_{len(st.session_state.messages)}"
                         if st.button("🗑️ Clear suggestions", key=clear_key):
                             st.session_state.suggested_prompts = []
                             st.rerun()
 
-            except Exception as e:
-                logger.error(f"An error occurred: {e}", exc_info=True)
-                st.error(f"An unexpected error occurred: {e}")
+                except Exception as e:
+                    logger.error(f"An error occurred: {e}", exc_info=True)
+                    st.error("❌ An error occurred while processing your request. Please try again.")
+                    status.update(label="❌ Error occurred", state="error")
+    
+    # Close chat container
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # Auto-scroll to the bottom of the chat
     st.markdown("<script>window.scrollTo(0, document.body.scrollHeight);</script>", unsafe_allow_html=True)
