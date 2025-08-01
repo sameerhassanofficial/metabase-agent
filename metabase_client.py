@@ -32,15 +32,20 @@ class MetabaseClient:
         self.config = config
         self.session = requests.Session()
         retry_strategy = Retry(
-            total=3,  # Reduced from 5 for faster failures
-            backoff_factor=0.5,  # Reduced backoff factor
+            total=2,  # Reduced from 3 for faster failures
+            backoff_factor=0.3,  # Reduced backoff factor
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["HEAD", "GET", "POST", "PUT", "DELETE", "OPTIONS"]
         )
-        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=20)
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy, 
+            pool_connections=20,  # Increased for parallel requests
+            pool_maxsize=30,      # Increased for parallel requests
+            pool_block=False      # Don't block when pool is full
+        )
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
-        self.session.timeout = 30  # Reduced timeout
+        self.session.timeout = 15  # Reduced timeout for faster failures
 
     def authenticate(self) -> bool:
         """Authenticates with Metabase and stores the session token."""

@@ -5,6 +5,24 @@ from analytics_utils import get_numeric_summaries, predict_trend
 import logging
 import uuid
 
+def format_column_display_name(column_name: str) -> str:
+    """
+    Format column name for display, avoiding double "Total" prefixes.
+    """
+    if not column_name:
+        return "Total"
+    
+    # If column name already starts with "Total", return as is
+    if column_name.lower().startswith('total'):
+        return column_name
+    
+    # If column name contains "Total" anywhere, return as is
+    if 'total' in column_name.lower():
+        return column_name
+    
+    # Otherwise, add "Total" prefix
+    return f"Total {column_name}"
+
 def render_chat_response(response_json):
     """Renders a structured AI response, including text, charts, and tables. Logs errors for malformed parts."""
     logger = logging.getLogger(__name__)
@@ -325,7 +343,8 @@ def render_chat_response(response_json):
                     st.plotly_chart(fig, use_container_width=True, key=chart_key)
                     if value_col and value_col in df.columns and pd.api.types.is_numeric_dtype(df[value_col]):
                         total = df[value_col].sum()
-                        st.markdown(f"**Total {value_col}:** {total:,.2f}")
+                        display_name = format_column_display_name(value_col)
+                        st.markdown(f"**{display_name}:** {total:,.2f}")
                     if chart_type in ("line", "bar") and x_col and value_col and x_col in df.columns and value_col in df.columns:
                         # Only run trend prediction if x_col is numeric and not an ID/code/categorical column
                         if (
